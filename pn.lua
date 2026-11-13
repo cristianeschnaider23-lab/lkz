@@ -5,6 +5,11 @@ local controlDescriptions = {
     ["Distancia maxima"] = "Universal: limita a distancia fisica dos alvos em studs. Zero desativa o limite.",
     ["Poeira no fundo"] = "Painel: mostra pequenas particulas pretas flutuando atras dos controles.",
     ["Quantidade de particulas"] = "Painel: controla a quantidade de pontos de poeira. Menos pontos reduzem o custo visual.",
+    ["Ativar ataque TP"] = "Especifico/experimental: tenta lancar faca usando clique direito, apontando para a cabeca. Retorna a posicao guardada. Sem garantia de dano ou vitoria.",
+    ["Ignorar aliados no TP"] = "Ataque TP: exclui jogadores no mesmo Team do Roblox. Nao reconhece sistemas de time personalizados.",
+    ["Distancia do alvo"] = "Ataque TP: distancia atras do inimigo onde a tentativa acontece. Nao usa noclip.",
+    ["Tempo antes de voltar"] = "Ataque TP: tempo local ate retornar a posicao original. Nao mede a confirmacao do servidor.",
+    ["Intervalo entre tentativas"] = "Ataque TP: pausa minima entre ciclos. O tempo de retorno tambem limita a frequencia.",
     ["Ativar ESP RGB"] = "Universal: destaca outros personagens com cores RGB, inclusive atraves de paredes. Depende de personagens compativeis com Highlight.",
     ["Velocidade RGB"] = "Universal: controla a velocidade da troca de cores do ESP.",
     ["Transparencia do preenchimento"] = "Universal: 0% deixa o preenchimento solido; 100% deixa apenas o contorno.",
@@ -361,6 +366,7 @@ do
                 round(box,4)
                 local key = settings.Name .. ":" .. s.Name
                 local saved = preferences[key]
+                if s.Persist == false then saved = nil end
                 local value = type(saved) == "boolean" and saved or s.Default == true
                 if type(saved) == "boolean" then value = saved end
                 local function set(v)
@@ -368,7 +374,7 @@ do
                     box.Text = value and "✓" or ""
                     box.BackgroundColor3 = value and Color3.fromRGB(205,24,50) or Color3.fromRGB(63,29,39)
                     invoke(s.Callback,value)
-                    remember(key,value)
+                    if s.Persist ~= false then remember(key,value) end
                 end
                 on(hit.Activated,function() set(not value) end)
                 set(value)
@@ -524,6 +530,106 @@ local function notify(message)
     OrionLib:MakeNotification({Name = "Orion PC", Content = message,
         Image = "rbxassetid://4483345998", Time = 6})
 end
+
+-- Ataque experimental: ida, tentativa de clique e retorno. Nao confirma dano.
+local rapid = {enabled = false, teamCheck = true, offset = 4, interval = 0.6, stay = 0.18}
+local rapidToggle, trip, inputSender
+local rapidClock, nextTrip = 0, 0
+local lastAttacked = {}
+local function inputButton(position, down)
+    if not inputSender then
+        local ok, virtual = pcall(function() return UIS:CreateVirtualInput() end)
+        if ok and virtual then
+            inputSender = function(p, pressed)
+                virtual:SendMouseButton(p, Enum.UserInputType.MouseButton2, pressed, 0)
+            end
+        else
+            local manager = game:GetService("VirtualInputManager")
+            inputSender = function(p, pressed)
+                manager:SendMouseButtonEvent(math.floor(p.X), math.floor(p.Y), 1, pressed, game, 0)
+            end
+        end
+    end
+    inputSender(position, down)
+end
+local function finishTrip()
+    local pending = trip
+    if not pending then return end
+    trip = nil
+    if pending.pressed then
+        local released, releaseError = pcall(inputButton, pending.mouse, false)
+        if not released then warn("[LKZ Painel] Falha ao soltar clique: " .. tostring(releaseError)) end
+    end
+    local health = pending.character:FindFirstChildOfClass("Humanoid")
+    if me.Character == pending.character and pending.root.Parent and health and health.Health > 0 then
+        pending.root.CFrame = pending.origin
+        pending.root.AssemblyLinearVelocity = pending.velocity
+        pending.root.AssemblyAngularVelocity = pending.angular
+        if Workspace.CurrentCamera == pending.camera then pending.camera.CFrame = pending.view end
+    end
+end
+local function stopRapid()
+    rapid.enabled = false
+    finishTrip()
+end
+local function findRapidTarget(origin)
+    local best, distance = nil, math.huge
+    for _, player in ipairs(Players:GetPlayers()) do
+        local ally = rapid.teamCheck and not me.Neutral and not player.Neutral
+            and me.Team ~= nil and player.Team == me.Team
+        if player ~= me and not ally then
+            local model = player.Character
+            local root = model and model:FindFirstChild("HumanoidRootPart")
+            local head = model and model:FindFirstChild("Head")
+            local health = model and model:FindFirstChildOfClass("Humanoid")
+            if root and head and head:IsA("BasePart") and health and health.Health > 0
+                and rapidClock - (lastAttacked[player] or -100) >= 0.8 then
+                local d = (root.Position - origin).Magnitude
+                if d < distance then best = {player = player, root = root, head = head} distance = d end
+            end
+        end
+    end
+    return best
+end
+local function rapidStep(dt)
+    rapidClock = rapidClock + dt
+    if trip then
+        if rapidClock >= trip.releaseAt and trip.pressed then
+            inputButton(trip.mouse, false)
+            trip.pressed = false
+        end
+        if rapidClock >= trip.returnAt then finishTrip() end
+        return
+    end
+    if not rapid.enabled or rapidClock < nextTrip or UIS:GetFocusedTextBox() then return end
+    local character = me.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local health = character and character:FindFirstChildOfClass("Humanoid")
+    local equipped = character and character:FindFirstChildOfClass("Tool")
+    local camera = Workspace.CurrentCamera
+    if not root or not health or health.Health <= 0 or not equipped or not camera then return end
+    local target = findRapidTarget(root.Position)
+    if not target then return end
+    local origin = root.CFrame
+    trip = {character = character, root = root, origin = origin,
+        velocity = root.AssemblyLinearVelocity, angular = root.AssemblyAngularVelocity,
+        camera = camera, view = camera.CFrame, mouse = UIS:GetMouseLocation(),
+        pressed = false, releaseAt = rapidClock + 0.05, returnAt = rapidClock + rapid.stay}
+    local destination = target.root.Position - target.root.CFrame.LookVector * rapid.offset
+    root.CFrame = CFrame.new(destination, Vector3.new(target.root.Position.X, destination.Y, target.root.Position.Z))
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    camera.CFrame = CFrame.new(destination + Vector3.new(0,2,0), target.head.Position)
+    local screen = camera:WorldToViewportPoint(target.head.Position)
+    local inset = GuiService:GetGuiInset()
+    trip.mouse = Vector2.new(screen.X, screen.Y) + inset
+    -- Marca antes de enviar para tentar soltar mesmo se a chamada falhar parcialmente.
+    trip.pressed = true
+    inputButton(trip.mouse, true)
+    lastAttacked[target.player] = rapidClock
+    nextTrip = rapidClock + math.max(rapid.interval, rapid.stay + 0.1)
+end
+
 local function ensureCircle()
     if circle then return true end
     local ok, result = pcall(function()
@@ -575,6 +681,7 @@ end
 function controller.Destroy()
     if destroyed then return end
     destroyed = true
+    stopRapid()
     state.aim = false
     setESP(false)
     for _, c in ipairs(connections) do c:Disconnect() end
@@ -625,6 +732,35 @@ Aim:AddSlider({Name = "Raio do FOV", Min = 25, Max = 600, Default = 150,
     Increment = 1, ValueName = "px", Callback = function(v) state.radius = v end})
 Aim:AddSlider({Name = "Forca da mira", Min = 1, Max = 100, Default = 35,
     Increment = 1, ValueName = "%", Callback = function(v) state.smooth = v / 100 end})
+local Rapid = Window:MakeTab({Name = "Ataque TP"})
+Rapid:AddParagraph("Experimental | Duelo de Facas", "Requer faca equipada e lancamento no clique direito. Guarda sua posicao, tenta um ataque na cabeca e retorna. Nao confirma abates; validacao e cooldown dependem do jogo.")
+rapidToggle = Rapid:AddToggle({Name = "Ativar ataque TP", Default = false, Persist = false, Callback = function(v)
+    rapid.enabled = v
+    nextTrip = rapidClock
+    if not v then finishTrip() end
+end})
+Rapid:AddToggle({Name = "Ignorar aliados no TP", Default = true, Callback = function(v) rapid.teamCheck = v end})
+Rapid:AddSlider({Name = "Distancia do alvo", Min = 3, Max = 12, Default = 4, Increment = 1,
+    ValueName = "studs", Callback = function(v) rapid.offset = v end})
+Rapid:AddSlider({Name = "Tempo antes de voltar", Min = 100, Max = 1000, Default = 180, Increment = 10,
+    ValueName = "ms", Callback = function(v) rapid.stay = v / 1000 end})
+Rapid:AddSlider({Name = "Intervalo entre tentativas", Min = 250, Max = 3000, Default = 600, Increment = 50,
+    ValueName = "ms", Callback = function(v) rapid.interval = v / 1000 end})
+Rapid:AddParagraph("Atalho e interrupcao", "Configure o atalho abaixo do botao Ativar. O modo sempre inicia desligado. Desligar ou encerrar o painel tenta soltar o clique e retornar. Menor tempo pode reduzir a chance de registrar o ataque.")
+connect(RunService.Heartbeat, function(dt)
+    local ok, err = pcall(rapidStep, dt)
+    if not ok then
+        stopRapid()
+        if rapidToggle then rapidToggle:Set(false) end
+        notify("Ataque TP interrompido: " .. tostring(err))
+    end
+end)
+connect(Players.PlayerRemoving, function(player) lastAttacked[player] = nil end)
+connect(me.CharacterRemoving, function()
+    stopRapid()
+    if rapidToggle then rapidToggle:Set(false) end
+end)
+
 local Settings = Window:MakeTab({Name = "Configuracoes", Icon = "rbxassetid://4483345998", PremiumOnly = false})
 Settings:AddParagraph("PC", "O atalho da janela pode ser alterado em Aparencia (padrao: Insert). Clique nos atalhos para escolher teclas; Esc remove o atalho. As opcoes sao salvas. Encerrar painel remove os efeitos.")
 Settings:AddButton({Name = "Encerrar painel", Callback = controller.Destroy})
