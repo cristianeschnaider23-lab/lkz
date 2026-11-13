@@ -70,23 +70,33 @@ do
     end
     local function text(parent, value, size)
         return make("TextLabel", {BackgroundTransparency = 1, Text = value,
-            TextColor3 = Color3.fromRGB(235,235,235), Font = Enum.Font.Gotham,
-            TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+            TextColor3 = Color3.new(1,1,1), Font = Enum.Font.GothamMedium,
+            TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
             Size = size or UDim2.new(1,-16,1,0), Position = UDim2.fromOffset(8,0)}, parent)
     end
     local function button(parent, value, size, position)
         local b = make("TextButton", {Text = value, Size = size, Position = position or UDim2.new(),
             BackgroundColor3 = Color3.new(1,1,1), BorderSizePixel = 0,
-            TextColor3 = Color3.fromRGB(235,235,235), Font = Enum.Font.Gotham,
-            TextSize = 13, AutoButtonColor = true}, parent)
+            TextColor3 = Color3.new(1,1,1), Font = Enum.Font.GothamMedium,
+            TextSize = 14, AutoButtonColor = true}, parent)
         round(b)
         make("UIGradient", {Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0,Color3.fromRGB(4,4,6)),
             ColorSequenceKeypoint.new(0.7,Color3.fromRGB(12,7,10)),
             ColorSequenceKeypoint.new(1,Color3.fromRGB(62,7,17))
         }), Rotation = 15}, b)
-        on(b.MouseEnter, function() b.TextColor3 = Color3.fromRGB(255,190,195) end)
-        on(b.MouseLeave, function() b.TextColor3 = Color3.fromRGB(235,235,235) end)
+        -- O gradiente afeta o desenho do TextButton, mas nao o texto deste filho.
+        b.TextTransparency = 1
+        local caption = make("TextLabel", {Name = "ReadableCaption", BackgroundTransparency = 1,
+            Size = UDim2.new(1,-12,1,0), Position = UDim2.fromOffset(6,0),
+            Text = b.Text, TextColor3 = Color3.new(1,1,1), Font = Enum.Font.GothamMedium,
+            TextSize = 14, TextWrapped = true, TextStrokeColor3 = Color3.new(0,0,0),
+            TextStrokeTransparency = 0.65, Active = false, ZIndex = b.ZIndex + 1}, b)
+        on(b:GetPropertyChangedSignal("Text"), function() caption.Text = b.Text end)
+        on(b:GetPropertyChangedSignal("Font"), function()
+            caption.Font = b.Font == Enum.Font.Gotham and Enum.Font.GothamMedium or b.Font
+        end)
+        on(b:GetPropertyChangedSignal("ZIndex"), function() caption.ZIndex = b.ZIndex + 1 end)
         make("UIStroke", {Color = Color3.new(0,0,0), Thickness = 1, Transparency = 0.05, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, b)
         return b
     end
