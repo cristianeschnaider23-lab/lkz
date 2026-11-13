@@ -8,8 +8,8 @@ local controlDescriptions = {
     ["Ativar ataque TP"] = "Especifico/experimental: tenta lancar faca usando clique direito, apontando para a cabeca. Retorna a posicao guardada. Sem garantia de dano ou vitoria.",
     ["Ignorar aliados no TP"] = "Ataque TP: exclui jogadores no mesmo Team do Roblox. Nao reconhece sistemas de time personalizados.",
     ["Distancia do alvo"] = "Ataque TP: distancia atras do inimigo onde a tentativa acontece. Nao usa noclip.",
-    ["Tempo antes de voltar"] = "Ataque TP: tempo local ate retornar a posicao original. Nao mede a confirmacao do servidor.",
-    ["Intervalo entre tentativas"] = "Ataque TP: pausa minima entre ciclos. O tempo de retorno tambem limita a frequencia.",
+    ["Duracao do clique direito"] = "Ataque TP: tempo entre pressionar e soltar. Retorna imediatamente apos soltar. 0 ms envia ambos na mesma atualizacao; valores positivos dependem da taxa de quadros.",
+    ["Intervalo entre tentativas"] = "Ataque TP: pausa minima entre ciclos. A duracao do clique tambem limita a frequencia.",
     ["Ativar ESP RGB"] = "Universal: destaca outros personagens com cores RGB, inclusive atraves de paredes. Depende de personagens compativeis com Highlight.",
     ["Velocidade RGB"] = "Universal: controla a velocidade da troca de cores do ESP.",
     ["Transparencia do preenchimento"] = "Universal: 0% deixa o preenchimento solido; 100% deixa apenas o contorno.",
@@ -532,7 +532,7 @@ local function notify(message)
 end
 
 -- Ataque experimental: ida, tentativa de clique e retorno. Nao confirma dano.
-local rapid = {enabled = false, teamCheck = true, offset = 4, interval = 0.6, stay = 0.18}
+local rapid = {enabled = false, teamCheck = true, offset = 4, interval = 0.6, hold = 0.001}
 local rapidToggle, trip, inputSender
 local rapidClock, nextTrip = 0, 0
 local lastAttacked = {}
@@ -597,8 +597,9 @@ local function rapidStep(dt)
         if rapidClock >= trip.releaseAt and trip.pressed then
             inputButton(trip.mouse, false)
             trip.pressed = false
+            -- Retorna nesta mesma atualizacao, imediatamente depois da soltura.
+            finishTrip()
         end
-        if rapidClock >= trip.returnAt then finishTrip() end
         return
     end
     if not rapid.enabled or rapidClock < nextTrip or UIS:GetFocusedTextBox() then return end
@@ -614,7 +615,7 @@ local function rapidStep(dt)
     trip = {character = character, root = root, origin = origin,
         velocity = root.AssemblyLinearVelocity, angular = root.AssemblyAngularVelocity,
         camera = camera, view = camera.CFrame, mouse = UIS:GetMouseLocation(),
-        pressed = false, releaseAt = rapidClock + 0.05, returnAt = rapidClock + rapid.stay}
+        pressed = false, releaseAt = rapidClock + rapid.hold}
     local destination = target.root.Position - target.root.CFrame.LookVector * rapid.offset
     root.CFrame = CFrame.new(destination, Vector3.new(target.root.Position.X, destination.Y, target.root.Position.Z))
     root.AssemblyLinearVelocity = Vector3.zero
@@ -627,7 +628,12 @@ local function rapidStep(dt)
     trip.pressed = true
     inputButton(trip.mouse, true)
     lastAttacked[target.player] = rapidClock
-    nextTrip = rapidClock + math.max(rapid.interval, rapid.stay + 0.1)
+    nextTrip = rapidClock + math.max(rapid.interval, rapid.hold + 0.001)
+    if rapid.hold == 0 then
+        inputButton(trip.mouse, false)
+        trip.pressed = false
+        finishTrip()
+    end
 end
 
 local function ensureCircle()
@@ -733,7 +739,7 @@ Aim:AddSlider({Name = "Raio do FOV", Min = 25, Max = 600, Default = 150,
 Aim:AddSlider({Name = "Forca da mira", Min = 1, Max = 100, Default = 35,
     Increment = 1, ValueName = "%", Callback = function(v) state.smooth = v / 100 end})
 local Rapid = Window:MakeTab({Name = "Ataque TP"})
-Rapid:AddParagraph("Experimental | Duelo de Facas", "Requer faca equipada e lancamento no clique direito. Guarda sua posicao, tenta um ataque na cabeca e retorna. Nao confirma abates; validacao e cooldown dependem do jogo.")
+Rapid:AddParagraph("Experimental | Duelo de Facas", "Requer faca equipada e lancamento no clique direito. Guarda sua posicao, teleporta, aponta para a cabeca, pressiona e solta o clique direito e retorna logo apos soltar. Nao confirma abates; validacao e cooldown dependem do jogo.")
 rapidToggle = Rapid:AddToggle({Name = "Ativar ataque TP", Default = false, Persist = false, Callback = function(v)
     rapid.enabled = v
     nextTrip = rapidClock
@@ -742,11 +748,11 @@ end})
 Rapid:AddToggle({Name = "Ignorar aliados no TP", Default = true, Callback = function(v) rapid.teamCheck = v end})
 Rapid:AddSlider({Name = "Distancia do alvo", Min = 3, Max = 12, Default = 4, Increment = 1,
     ValueName = "studs", Callback = function(v) rapid.offset = v end})
-Rapid:AddSlider({Name = "Tempo antes de voltar", Min = 100, Max = 1000, Default = 180, Increment = 10,
-    ValueName = "ms", Callback = function(v) rapid.stay = v / 1000 end})
+Rapid:AddSlider({Name = "Duracao do clique direito", Min = 0, Max = 200, Default = 1, Increment = 1,
+    ValueName = "ms", Callback = function(v) rapid.hold = v / 1000 end})
 Rapid:AddSlider({Name = "Intervalo entre tentativas", Min = 250, Max = 3000, Default = 600, Increment = 50,
     ValueName = "ms", Callback = function(v) rapid.interval = v / 1000 end})
-Rapid:AddParagraph("Atalho e interrupcao", "Configure o atalho abaixo do botao Ativar. O modo sempre inicia desligado. Desligar ou encerrar o painel tenta soltar o clique e retornar. Menor tempo pode reduzir a chance de registrar o ataque.")
+Rapid:AddParagraph("Atalho e interrupcao", "Configure o atalho abaixo do botao Ativar. O modo sempre inicia desligado. Desligar ou encerrar o painel tenta soltar o clique e retornar. A duracao padrao e 1 ms, processada na proxima atualizacao do jogo; 0 ms tenta pressionar e soltar na mesma atualizacao.")
 connect(RunService.Heartbeat, function(dt)
     local ok, err = pcall(rapidStep, dt)
     if not ok then
